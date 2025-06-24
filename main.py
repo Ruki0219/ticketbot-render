@@ -58,10 +58,13 @@ async def on_guild_channel_update(before, after):
             except Exception as e:
                 print(f"❌ Failed to rename: {e}")
 
-# === Helper to extract channel ID ===
+# === Helper to extract channel ID from mention/link/raw ===
 def extract_channel_id(raw):
-    match = re.search(r"(\d{17,19})$", raw)
-    return int(match.group(1)) if match else None
+    # Matches <#123456789012345678>, links, or plain IDs
+    match = re.search(r"<#?(\d{17,19})>|(\d{17,19})|channels/\d+/(d{17,19})", raw)
+    if match:
+        return int(match.group(1) or match.group(2))
+    return None
 
 # === Commands ===
 @bot.command()
@@ -69,20 +72,28 @@ async def status(ctx):
     await ctx.send(f"✅ I'm online and currently locking {len(ticket_names)} ticket(s).")
 
 @bot.command()
-async def rename(ctx, channel_ref: str, *, new_name: str):
-    channel_id = extract_channel_id(channel_ref)
-    if channel_id:
+async def rename(ctx, *args):
+    if len(args) == 1:
+        # Only new name provided, use current channel
+        new_name = args[0]
+        channel = ctx.channel
+    elif len(args) >= 2:
+        channel_id = extract_channel_id(args[0])
+        if not channel_id:
+            return await ctx.send("⚠️ Invalid channel mention, link, or ID.")
         channel = bot.get_channel(channel_id)
-        if channel:
-            try:
-                await channel.edit(name=new_name)
-                await ctx.send(f"✅ Renamed <#{channel_id}> to `{new_name}`.")
-            except Exception as e:
-                await ctx.send(f"❌ Failed to rename: {e}")
-        else:
-            await ctx.send("⚠️ Could not find the channel.")
+        if not channel:
+            return await ctx.send("⚠️ Could not find the channel.")
+        new_name = ' '.join(args[1:])
     else:
-        await ctx.send("⚠️ Invalid channel link or ID.")
+        return await ctx.send("⚠️ Usage: `!rename [channel] <new name>`")
+
+    try:
+        old_name = channel.name
+        await channel.edit(name=new_name)
+        await ctx.send(f"✅ Renamed channel <#{channel.id}> from `{old_name}` to `{new_name}`.")
+    except Exception as e:
+        await ctx.send(f"❌ Failed to rename: {e}")
 
 @bot.command()
 async def lockname(ctx, channel_ref: str, *, desired_name: str):
@@ -90,9 +101,9 @@ async def lockname(ctx, channel_ref: str, *, desired_name: str):
     if channel_id:
         ticket_names[channel_id] = desired_name
         save_protected()
-        await ctx.send(f"🔒 Locked name of <#{channel_id}> as `{desired_name}`.")
+        await ctx.send(f"🔐 Locked name of <#{channel_id}> as `{desired_name}`.")
     else:
-        await ctx.send("⚠️ Invalid channel link or ID.")
+        await ctx.send("⚠️ Invalid channel mention, link, or ID.")
 
 @bot.command()
 async def unlockname(ctx, channel_ref: str):
