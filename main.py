@@ -26,7 +26,7 @@ intents.guilds = True
 intents.guild_messages = True
 intents.message_content = True
 
-bot = commands.Bot(command_prefix="!", intents=intents)
+bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 
 # === Load protected tickets ===
 PROTECTED_FILE = "protected_tickets.json"
