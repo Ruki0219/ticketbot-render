@@ -61,7 +61,7 @@ async def on_guild_channel_update(before, after):
 # === Helper to extract channel ID from mention/link/raw ===
 def extract_channel_id(raw):
     # Matches <#123456789012345678>, links, or plain IDs
-    match = re.search(r"<#?(\d{17,19})>|(\d{17,19})|channels/\d+/(d{17,19})", raw)
+    match = re.search(r"<#?(\d{17,19})>|(\d{17,19})|channels/\d+/(\d{17,19})", raw)
     if match:
         return int(match.group(1) or match.group(2))
     return None
@@ -114,6 +114,30 @@ async def unlockname(ctx, channel_ref: str):
         await ctx.send(f"🔓 Unlocked name for <#{channel_id}>. It can now be changed freely.")
     else:
         await ctx.send("⚠️ This channel isn't being auto-renamed or wasn't found.")
+
+@bot.command()
+async def help(ctx):
+    help_text = (
+        "**📜 TicketRenamer Bot – Command List**\n"
+        "➡️ Use these commands to interact with the TicketRenamer bot. You can use channel mentions (like `#ticket-0004`), links, or raw channel IDs.\n"
+        "\n"
+        "**🆘 !help**\n"
+        "Shows the full list of commands and their usage.\n"
+        "\n"
+        "**✅ !status**\n"
+        "Shows if the bot is online and how many channels are currently locked.\n"
+        "\n"
+        "**✏️ !rename**\n"
+        "`!rename new-name` ➡️ Renames the current channel.\n"
+        "`!rename #channel new-name` ➡️ Renames a specific channel.\n"
+        "\n"
+        "**🔒 !lockname**\n"
+        "`!lockname #channel desired-name` ➡️ Locks a channel’s name.\n"
+        "\n"
+        "**🔓 !unlockname**\n"
+        "`!unlockname #channel` ➡️ Unlocks a channel so its name can change freely."
+    )
+    await ctx.send(help_text)
 
 # === Launch bot ===
 keep_alive()
