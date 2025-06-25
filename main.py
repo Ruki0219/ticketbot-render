@@ -51,31 +51,31 @@ async def on_ready():
 async def on_guild_channel_update(before, after):
     if after.id in ticket_names:
         expected_name = ticket_names[after.id]
-        if after.name != expected_name:
+        expected_discord_name = expected_name.replace(' ', '-').lower()
+
+        if after.name != expected_discord_name:
             try:
-                await after.edit(name=expected_name)
-                print(f"🔁 Renamed {after.name} back to {expected_name}")
+                await after.edit(name=expected_discord_name)
+                print(f"🔁 Renamed {after.name} back to {expected_discord_name}")
             except Exception as e:
                 print(f"❌ Failed to rename: {e}")
 
 # === Helper to extract channel ID from mention/link/raw ===
 def extract_channel_id(raw):
-    # Matches <#123456789012345678>, links, or plain IDs
-    match = re.search(r"<#?(\d{17,19})>|(\d{17,19})|channels/\d+/(\d{17,19})", raw)
+    match = re.search(r"<#?(\d{17,19})>|(\d{17,19})|channels/\d+/(\d{17,19})", raw)
     if match:
-        return int(match.group(1) or match.group(2))
+        return int(match.group(1) or match.group(2) or match.group(3))
     return None
 
 # === Commands ===
 @bot.command()
 async def status(ctx):
-    await ctx.send(f"✅ I'm online and currently locking {len(ticket_names)} ticket(s).")
+    await ctx.send(f"✅ I'm online and currently locking {len(ticket_names)} channel(s).")
 
 @bot.command()
 async def rename(ctx, *args):
     if len(args) == 1:
-        # Only new name provided, use current channel
-        new_name = args[0]
+        new_name = args[0].replace(' ', '-').lower()
         channel = ctx.channel
     elif len(args) >= 2:
         channel_id = extract_channel_id(args[0])
@@ -84,7 +84,7 @@ async def rename(ctx, *args):
         channel = bot.get_channel(channel_id)
         if not channel:
             return await ctx.send("⚠️ Could not find the channel.")
-        new_name = ' '.join(args[1:])
+        new_name = ' '.join(args[1:]).replace(' ', '-').lower()
     else:
         return await ctx.send("⚠️ Usage: `!rename [channel] <new name>`")
 
@@ -99,9 +99,10 @@ async def rename(ctx, *args):
 async def lockname(ctx, channel_ref: str, *, desired_name: str):
     channel_id = extract_channel_id(channel_ref)
     if channel_id:
-        ticket_names[channel_id] = desired_name
+        normalized_name = desired_name.replace(' ', '-').lower()
+        ticket_names[channel_id] = normalized_name
         save_protected()
-        await ctx.send(f"🔐 Locked name of <#{channel_id}> as `{desired_name}`.")
+        await ctx.send(f"🔐 Locked name of <#{channel_id}> as `{normalized_name}`.")
     else:
         await ctx.send("⚠️ Invalid channel mention, link, or ID.")
 
@@ -115,14 +116,27 @@ async def unlockname(ctx, channel_ref: str):
     else:
         await ctx.send("⚠️ This channel isn't being auto-renamed or wasn't found.")
 
+@bot.command(name="lockedlist")
+async def lockedlist(ctx):
+    if not ticket_names:
+        return await ctx.send("ℹ️ No channels are currently locked.")
+    
+    message = "**🔒 Locked Channels:**\n"
+    for channel_id, name in ticket_names.items():
+        channel = bot.get_channel(channel_id)
+        channel_display = f"<#{channel_id}>" if channel else f"(Deleted or inaccessible channel {channel_id})"
+        message += f"- {channel_display} ➡️ `{name}`\n"
+    
+    await ctx.send(message)
+
 @bot.command()
 async def help(ctx):
     help_text = (
-        "**📜 TicketRenamer Bot – Command List**\n"
-        "➡️ Use these commands to interact with the TicketRenamer bot. You can use channel mentions (like `#ticket-0004`), links, or raw channel IDs.\n"
+        "**📜 Renamer Bot – Command List**\n"
+        "➡️ You can use channel mentions (like `#channel`), links, or raw channel IDs.\n"
         "\n"
         "**🆘 !help**\n"
-        "Shows the full list of commands and their usage.\n"
+        "Shows this help message.\n"
         "\n"
         "**✅ !status**\n"
         "Shows if the bot is online and how many channels are currently locked.\n"
@@ -135,7 +149,10 @@ async def help(ctx):
         "`!lockname #channel desired-name` ➡️ Locks a channel’s name.\n"
         "\n"
         "**🔓 !unlockname**\n"
-        "`!unlockname #channel` ➡️ Unlocks a channel so its name can change freely."
+        "`!unlockname #channel` ➡️ Unlocks a channel.\n"
+        "\n"
+        "**📃 !lockedlist**\n"
+        "Shows all currently locked channels and their locked names."
     )
     await ctx.send(help_text)
 
