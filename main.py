@@ -139,6 +139,16 @@ async def on_voice_state_update(member, before, after):
 async def on_guild_channel_update(before, after):
     await enforce_name(after)
 
+@bot.event
+async def on_member_update(before, after):
+    # Re-check all locked channels with presence variables when a user goes offline/online
+    for guild in bot.guilds:
+        for channel_id, raw_name in ticket_names.get(guild.id, {}).items():
+            if any(v in raw_name for v in ["{online}", "{onlinemods}"]):
+                channel = bot.get_channel(channel_id)
+                if channel:
+                    await enforce_name(channel)
+
 # === Commands ===
 @bot.command()
 async def help(ctx):
