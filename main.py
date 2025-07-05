@@ -129,22 +129,23 @@ async def on_ready():
     print("🧼 Cleared last_names cache on startup")
 
     async def loop():
-    await bot.wait_until_ready()
-    while not bot.is_closed():
-        for guild in bot.guilds:
-            for channel in guild.channels:
-                try:
-                    raw_locked = ticket_names.get(guild.id, {}).get(channel.id)
-                    if not raw_locked:
-                        continue  # skip if not locked
+        await bot.wait_until_ready()
+        while not bot.is_closed():
+            for guild in bot.guilds:
+                for channel in guild.channels:
+                    try:
+                        raw_locked = ticket_names.get(guild.id, {}).get(channel.id)
+                        if not raw_locked:
+                            continue  # skip if not locked
 
-                    is_dynamic = any(var in raw_locked for var in ["{vc}", "{count}", "{online}", "{onlinemods}"])
-                    if is_dynamic:
-                        await enforce_name(channel, force=True)
-                except Exception as e:
-                    print(f"Loop rename fail: {e}")
-        await asyncio.sleep(1.5)
-bot.loop.create_task(loop())
+                        is_dynamic = any(var in raw_locked for var in ["{vc}", "{count}", "{online}", "{onlinemods}"])
+                        if is_dynamic:
+                            await enforce_name(channel, force=True)
+                    except Exception as e:
+                        print(f"Loop rename fail: {e}")
+            await asyncio.sleep(1.5)
+    
+    bot.loop.create_task(loop())
 
 @bot.event
 async def on_voice_state_update(member, before, after):
