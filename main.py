@@ -53,7 +53,7 @@ def load_json(file, default):
 ticket_names = load_json(PROTECTED_FILE, {})
 fallback_formats = load_json(FORMAT_FILE, {})
 mod_roles = load_json(MOD_ROLE_FILE, {})
-
+cooldowns = {}
 last_names = {}
 
 def save_json(file, data):
@@ -124,13 +124,6 @@ async def enforce_name(channel, force=False):
             last_names[channel.id] = new_name
             return
 
-        # ❗ NEW: Cooldown check
-        now = time.time()
-        if now - cooldowns[channel.id] < 1.0:
-            print(f"🕒 Skipped rename due to cooldown: {channel.name}")
-            return
-        cooldowns[channel.id] = now
-
         try:
             await channel.edit(name=new_name)
             last_names[channel.id] = new_name
@@ -157,9 +150,14 @@ async def on_ready():
 
                         is_dynamic = any(var in raw_locked for var in ["{vc}", "{count}", "{online}", "{onlinemods}"])
                         if is_dynamic:
-                            await enforce_name(channel, force=True)
+                            now = time.time()
+                            if now - cooldowns.get(channel.id, 0) >= 1.0:
+                                cooldowns[channel.id] = now
+                                await enforce_name(channel, force=True)
+
                     except Exception as e:
                         print(f"Loop rename fail: {e}")
+
             await asyncio.sleep(1.5)
     
     bot.loop.create_task(loop())
@@ -168,6 +166,9 @@ async def on_ready():
 async def on_voice_state_update(member, before, after):
     await asyncio.sleep(0.5)
     for vc in set(filter(None, [before.channel, after.channel])):
+    now = time.time()
+    if now - cooldowns.get(vc.id, 0) >= 1.0:
+        cooldowns[vc.id] = now
         await enforce_name(vc, force=True)
 
 @bot.event
@@ -182,7 +183,10 @@ async def on_member_update(before, after):
             if any(v in raw_name for v in ["{online}", "{onlinemods}"]):
                 channel = bot.get_channel(channel_id)
                 if channel:
-                    await enforce_name(channel)
+                    now = time.time()
+                    if now - cooldowns.get(channel.id, 0) >= 1.0:
+                        cooldowns[channel.id] = now
+                        await enforce_name(channel)
 
 # === Commands ===
 @bot.command()
