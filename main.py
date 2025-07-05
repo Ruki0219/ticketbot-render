@@ -106,18 +106,25 @@ async def enforce_name(channel, force=False):
     guild_id = channel.guild.id
     if guild_id in ticket_names and channel.id in ticket_names[guild_id]:
         raw_locked = ticket_names[guild_id][channel.id]
-        name = format_vc_name(channel, raw_locked).replace(' ', '-').lower()
-        name = re.sub(r"[-_]{2,}", "-", name).strip("-")
+        new_name = format_vc_name(channel, raw_locked).replace(' ', '-').lower()
+        new_name = re.sub(r"[-_]{2,}", "-", new_name).strip("-")
 
         global last_names
-        if not force and last_names.get(channel.id) == name:
+        prev_name = last_names.get(channel.id)
+
+        if not force and prev_name == new_name:
             print(f"⏳ No rename needed for {channel.name} (name unchanged)")
             return
 
+        # Even with force=True, if the name is unchanged, skip the request
+        if prev_name == new_name:
+            print(f"🚫 Skipping redundant rename for {channel.name} → {new_name}")
+            return
+
         try:
-            await channel.edit(name=name)
-            last_names[channel.id] = name
-            print(f"🔁 Enforced rename: {channel.name} → {name}")
+            await channel.edit(name=new_name)
+            last_names[channel.id] = new_name
+            print(f"🔁 Enforced rename: {channel.name} → {new_name}")
         except discord.HTTPException as e:
             print(f"❌ Failed to rename (rate limit?): {e}")
 
