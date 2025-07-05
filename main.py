@@ -8,6 +8,10 @@ import re
 from flask import Flask
 from threading import Thread
 import asyncio
+from collections import defaultdict
+import time
+
+cooldowns = defaultdict(lambda: 0)
 
 # === Flask keep_alive setup ===
 app = Flask(__name__)
@@ -110,16 +114,22 @@ async def enforce_name(channel, force=False):
         new_name = re.sub(r"[-_]{2,}", "-", new_name).strip("-")
 
         global last_names
-        prev_name = last_names.get(channel.id)
-
-        if not force and prev_name == new_name:
+        if not force and last_names.get(channel.id) == new_name:
             print(f"⏳ No rename needed for {channel.name} (name unchanged)")
             return
 
-        # Even with force=True, if the name is unchanged, skip the request
-        if prev_name == new_name:
+        # ❗ Skip rename if already correct
+        if channel.name == new_name:
             print(f"🚫 Skipping redundant rename for {channel.name} → {new_name}")
+            last_names[channel.id] = new_name
             return
+
+        # ❗ NEW: Cooldown check
+        now = time.time()
+        if now - cooldowns[channel.id] < 1.0:
+            print(f"🕒 Skipped rename due to cooldown: {channel.name}")
+            return
+        cooldowns[channel.id] = now
 
         try:
             await channel.edit(name=new_name)
