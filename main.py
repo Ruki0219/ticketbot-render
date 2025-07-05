@@ -114,22 +114,29 @@ async def enforce_name(channel, force=False):
         new_name = re.sub(r"[-_]{2,}", "-", new_name).strip("-")
 
         global last_names
+
         if not force and last_names.get(channel.id) == new_name:
             print(f"⏳ No rename needed for {channel.name} (name unchanged)")
             return
 
-        # ❗ Skip rename if already correct
         if channel.name == new_name:
             print(f"🚫 Skipping redundant rename for {channel.name} → {new_name}")
             last_names[channel.id] = new_name
             return
 
+        now = time.time()
+        if now - cooldowns.get(channel.id, 0) < 1.0:
+            print(f"🕒 Skipped rename due to cooldown: {channel.name}")
+            return
+
+        cooldowns[channel.id] = now
+
         try:
             await channel.edit(name=new_name)
             last_names[channel.id] = new_name
             print(f"🔁 Enforced rename: {channel.name} → {new_name}")
-        except discord.HTTPException as e:
-            print(f"❌ Failed to rename (rate limit?): {e}")
+        except Exception as e:
+            print(f"❌ Rename failed for {channel.name}: {e}")
 
 # === Events + Background Loop ===
 @bot.event
