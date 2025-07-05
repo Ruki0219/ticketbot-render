@@ -115,22 +115,25 @@ async def enforce_name(channel, force=False):
 
         global last_names
 
+        # ✅ Skip if name already cached and unchanged (unless forced)
         if not force and last_names.get(channel.id) == new_name:
             print(f"⏳ No rename needed for {channel.name} (name unchanged)")
             return
 
+        # ✅ Skip if actual channel name is already correct
         if channel.name == new_name:
             print(f"🚫 Skipping redundant rename for {channel.name} → {new_name}")
             last_names[channel.id] = new_name
             return
 
+        # ✅ Cooldown check
         now = time.time()
         if now - cooldowns.get(channel.id, 0) < 1.0:
             print(f"🕒 Skipped rename due to cooldown: {channel.name}")
             return
-
         cooldowns[channel.id] = now
 
+        # ✅ Proceed with rename
         try:
             await channel.edit(name=new_name)
             last_names[channel.id] = new_name
