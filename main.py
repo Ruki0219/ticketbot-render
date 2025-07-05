@@ -33,8 +33,9 @@ bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 
 # === Load protected names ===
 PROTECTED_FILE = "protected_names.json"
+FORMATS_FILE = "formats.json"
+MOD_ROLE_FILE = "mod_role.json"
 FALLBACK_FORMAT = "{count}-in-vc"
-MOD_ROLE_NAME = "Mod"
 
 if os.path.exists(PROTECTED_FILE):
     with open(PROTECTED_FILE, "r") as f:
@@ -44,11 +45,32 @@ if os.path.exists(PROTECTED_FILE):
 else:
     ticket_names = {}
 
+if os.path.exists(FORMATS_FILE):
+    with open(FORMATS_FILE, "r") as f:
+        fallback_formats = json.load(f)
+        fallback_formats = {int(gid): {int(cid): fmt for cid, fmt in chans.items()} for gid, chans in fallback_formats.items()}
+else:
+    fallback_formats = {}
+
+if os.path.exists(MOD_ROLE_FILE):
+    with open(MOD_ROLE_FILE, "r") as f:
+        mod_roles = json.load(f)
+        mod_roles = {int(gid): int(rid) for gid, rid in mod_roles.items()}
+else:
+    mod_roles = {}
 
 def save_protected():
     with open(PROTECTED_FILE, "w") as f:
         json.dump({str(gid): {str(cid): name for cid, name in chans.items()}
                    for gid, chans in ticket_names.items()}, f)
+
+def save_formats():
+    with open(FORMATS_FILE, "w") as f:
+        json.dump({str(gid): {str(cid): fmt for cid, fmt in chans.items()} for gid, chans in fallback_formats.items()}, f)
+
+def save_mod_roles():
+    with open(MOD_ROLE_FILE, "w") as f:
+        json.dump({str(gid): rid for gid, rid in mod_roles.items()}, f)
 
 # === Helper ===
 def extract_channel_id(raw):
@@ -61,15 +83,20 @@ def get_member_names(channel):
     members = channel.members if hasattr(channel, 'members') else []
     return [m.display_name for m in members if not m.bot]
 
-def format_vc_name(members):
-    if len(members) == 1:
-        return f"[{members[0]}]"
+def get_fallback(gid, cid):
+    return fallback_formats.get(gid, {}).get(cid, FALLBACK_FORMAT)
+
+def format_vc_name(members, fallback):
+    if len(members) == 0:
+        return fallback
+    elif len(members) == 1:
+        return f"{members[0]}"
     elif len(members) == 2:
-        return f"[{members[0]}-{members[1]}]"
+        return f"{members[0]} and {members[1]}"
     elif len(members) == 3:
-        return f"[{members[0]}-{members[1]}-{members[2]}]"
+        return f"{members[0]}, {members[1]}, and {members[2]}"
     else:
-        return f"[{FALLBACK_FORMAT.replace('{count}', str(len(members)))}]"
+        return fallback.replace("{count}", str(len(members)))
 
 async def enforce_name(channel):
     guild_id = channel.guild.id
@@ -79,7 +106,12 @@ async def enforce_name(channel):
 
         if "{vc}" in name:
             members = get_member_names(channel)
-            name = name.replace("{vc}", format_vc_name(members))
+            fallback = get_fallback(guild_id, channel.id)
+            formatted = format_vc_name(members, fallback)
+            name = name.replace("{vc}", formatted)
+        elif "{count}" in name:
+            count = len(get_member_names(channel))
+            name = name.replace("{count}", str(count))
 
         name = name.replace(' ', '-').lower()
         if channel.name != name:
@@ -103,6 +135,13 @@ async def on_voice_state_update(member, before, after):
 @bot.event
 async def on_guild_channel_update(before, after):
     await enforce_name(after)
+
+# === Permissions ===
+def is_mod(ctx):
+    guild_id = ctx.guild.id
+    if guild_id in mod_roles:
+        return any(role.id == mod_roles[guild_id] for role in ctx.author.roles)
+    return ctx.author.guild_permissions.manage_channels
 
 # === Commands ===
 @bot.command()
@@ -141,6 +180,8 @@ async def rename(ctx, *args):
 
 @bot.command()
 async def lockname(ctx, *args):
+    if not is_mod(ctx):
+        return await ctx.send("🚫 You don't have permission to use this command.")
     if len(args) == 1:
         channel = ctx.channel
         desired_name = args[0]
@@ -166,6 +207,8 @@ async def lockname(ctx, *args):
 
 @bot.command()
 async def unlockname(ctx, channel_ref: str = None):
+    if not is_mod(ctx):
+        return await ctx.send("🚫 You don't have permission to use this command.")
     channel = ctx.channel
     if channel_ref:
         channel_id = extract_channel_id(channel_ref)
@@ -200,26 +243,56 @@ async def lockedlist(ctx):
 async def variablelist(ctx):
     await ctx.send(
         "**🔧 Available Variables:**\n"
-        "- `{vc}` ➝ Dynamic VC member names or fallback (e.g. `[Ruki-Jul-Kim]`, `[4-in-vc]`)\n"
-        "- `{online}` ➝ Future feature\n"
-        "- `{onlinemods}` ➝ Future feature (requires !setmodrole)"
+        "- `{vc}` ➝ Dynamic VC member names or fallback (e.g. `Ruki and Jul`, `4 in VC`)\n"
+        "- `{count}` ➝ Number of users\n"
+        "- `{online}` ➝ Online member count (future)\n"
+        "- `{onlinemods}` ➝ Online mod count (requires !setmodrole)"
     )
+
+@bot.command()
+async def setformat(ctx, *, format_str: str):
+    if not is_mod(ctx):
+        return await ctx.send("🚫 You don't have permission to use this command.")
+    guild_id = ctx.guild.id
+    channel_id = ctx.channel.id
+    if guild_id not in fallback_formats:
+        fallback_formats[guild_id] = {}
+    fallback_formats[guild_id][channel_id] = format_str
+    save_formats()
+    await ctx.send(f"⚙️ Fallback format for <#{channel_id}> set to `{format_str}`")
+
+@bot.command()
+async def showformat(ctx):
+    guild_id = ctx.guild.id
+    channel_id = ctx.channel.id
+    fmt = fallback_formats.get(guild_id, {}).get(channel_id, FALLBACK_FORMAT)
+    mod_role = mod_roles.get(guild_id)
+    mod_name = discord.utils.get(ctx.guild.roles, id=mod_role).name if mod_role else "None"
+    await ctx.send(f"🔧 Current fallback for this channel: `{fmt}`\n🛡️ Mod Role: `{mod_name}`")
+
+@bot.command()
+async def setmodrole(ctx, role: discord.Role):
+    if not is_mod(ctx):
+        return await ctx.send("🚫 You don't have permission to use this command.")
+    mod_roles[ctx.guild.id] = role.id
+    save_mod_roles()
+    await ctx.send(f"🛡️ Mod role set to `{role.name}`")
 
 @bot.command()
 async def help(ctx):
     help_text = (
         "**📜 Renamer Bot – Command List**\n"
         "➡️ You can use channel mentions (like `#channel`), links, or raw channel IDs.\n\n"
-        "**🆘 !help**\n➝ Shows this help message.\n\n"
-        "**✅ !status**\n➝ Shows if the bot is online and how many channels are locked.\n\n"
-        "**✏️ !rename**\n`!rename new-name` ➝ Renames the current channel.\n"
-        "`!rename #channel new-name` ➝ Renames a specific channel.\n\n"
-        "**🔒 !lockname**\n`!lockname desired-name` ➝ Locks the *current channel*.\n"
-        "`!lockname #channel desired-name` ➝ Locks a *specific channel*.\n\n"
-        "**🔓 !unlockname**\n`!unlockname` ➝ Unlocks the *current channel*.\n"
-        "`!unlockname #channel` ➝ Unlocks a *specific channel*.\n\n"
-        "**📃 !lockedlist**\n➝ Shows all currently locked channels and their names.\n\n"
-        "**🔧 !variablelist**\n➝ Shows available dynamic name variables."
+        "**🆘 !help**\n`!help` ➝ Shows this help message.\n\n"
+        "**✅ !status**\n`!status` ➝ Shows if the bot is online and how many channels are locked.\n\n"
+        "**✏️ !rename**\n`!rename new-name` ➝ Renames the current channel.\n`!rename #channel new-name` ➝ Renames a specific channel.\n\n"
+        "**🔒 !lockname**\n`!lockname desired-name` ➝ Locks the *current channel* with a static or dynamic name.\n`!lockname #channel desired-name` ➝ Locks a *specific channel*.\n\n"
+        "**🔓 !unlockname**\n`!unlockname` ➝ Unlocks the *current channel*.\n`!unlockname #channel` ➝ Unlocks a *specific channel*.\n\n"
+        "**📃 !lockedlist**\n`!lockedlist` ➝ Shows all currently locked channels and their names.\n\n"
+        "**🔧 !variablelist**\n`!variablelist` ➝ Shows available dynamic name variables.\n\n"
+        "**⚙️ !setformat**\n`!setformat fallback-name` ➝ Sets fallback name for empty/large VC user counts.\n\n"
+        "**🛡️ !setmodrole**\n`!setmodrole @RoleName` ➝ Sets a role allowed to use mod-only commands.\n\n"
+        "**📂 !showformat**\n`!showformat` ➝ Shows the fallback format for this channel and mod role."
     )
     await ctx.send(help_text)
 
