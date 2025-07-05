@@ -102,7 +102,7 @@ def format_vc_name(channel, template):
         name = name.replace("{onlinemods}", str(get_online_mods(channel.guild, role_id)))
     return name
 
-async def enforce_name(channel):
+async def enforce_name(channel, force=False):
     guild_id = channel.guild.id
     if guild_id in ticket_names and channel.id in ticket_names[guild_id]:
         raw_locked = ticket_names[guild_id][channel.id]
@@ -110,21 +110,22 @@ async def enforce_name(channel):
         name = re.sub(r"[-_]{2,}", "-", name).strip("-")
 
         global last_names
-        if last_names.get(channel.id) != name:
-            try:
-                await channel.edit(name=name)
-                last_names[channel.id] = name
-                print(f"🔁 Enforced rename: {channel.name} → {name}")
-            except discord.HTTPException as e:
-                print(f"❌ Failed to rename (rate limit?): {e}")
-        else:
+        if not force and last_names.get(channel.id) == name:
             print(f"⏳ No rename needed for {channel.name} (name unchanged)")
+            return
+
+        try:
+            await channel.edit(name=name)
+            last_names[channel.id] = name
+            print(f"🔁 Enforced rename: {channel.name} → {name}")
+        except discord.HTTPException as e:
+            print(f"❌ Failed to rename (rate limit?): {e}")
 
 # === Events + Background Loop ===
 @bot.event
 async def on_ready():
     print(f"✅ Logged in as {bot.user}")
-    last_names.clear()  # ✅ Add this line
+    last_names.clear()
     print("🧼 Cleared last_names cache on startup")
 
     async def loop():
@@ -141,10 +142,9 @@ async def on_ready():
 
 @bot.event
 async def on_voice_state_update(member, before, after):
-    await asyncio.sleep(1)
+    await asyncio.sleep(0.5)
     for vc in set(filter(None, [before.channel, after.channel])):
-        last_names.pop(vc.id, None)  # 🚨 Force a fresh rename on VC change
-        await enforce_name(vc)
+        await enforce_name(vc, force=True)
 
 @bot.event
 async def on_guild_channel_update(before, after):
