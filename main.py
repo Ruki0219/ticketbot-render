@@ -141,8 +141,9 @@ async def on_ready():
 
 @bot.event
 async def on_voice_state_update(member, before, after):
-    await asyncio.sleep(0)
+    await asyncio.sleep(1)
     for vc in set(filter(None, [before.channel, after.channel])):
+        last_names.pop(vc.id, None)  # 🚨 Force a fresh rename on VC change
         await enforce_name(vc)
 
 @bot.event
