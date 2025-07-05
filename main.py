@@ -50,6 +50,8 @@ ticket_names = load_json(PROTECTED_FILE, {})
 fallback_formats = load_json(FORMAT_FILE, {})
 mod_roles = load_json(MOD_ROLE_FILE, {})
 
+last_names = {}
+
 def save_json(file, data):
     with open(file, "w") as f:
         json.dump({str(k): {str(ik): iv for ik, iv in v.items()} if isinstance(v, dict) else v for k, v in data.items()}, f)
@@ -106,17 +108,25 @@ async def enforce_name(channel):
         raw_locked = ticket_names[guild_id][channel.id]
         name = format_vc_name(channel, raw_locked).replace(' ', '-').lower()
         name = re.sub(r"[-_]{2,}", "-", name).strip("-")
-        if channel.name != name:
+
+        global last_names
+        if last_names.get(channel.id) != name:
             try:
                 await channel.edit(name=name)
+                last_names[channel.id] = name
                 print(f"🔁 Enforced rename: {channel.name} → {name}")
-            except Exception as e:
-                print(f"❌ Failed to rename: {e}")
+            except discord.HTTPException as e:
+                print(f"❌ Failed to rename (rate limit?): {e}")
+        else:
+            print(f"⏳ No rename needed for {channel.name} (name unchanged)")
 
 # === Events + Background Loop ===
 @bot.event
 async def on_ready():
     print(f"✅ Logged in as {bot.user}")
+    last_names.clear()  # ✅ Add this line
+    print("🧼 Cleared last_names cache on startup")
+
     async def loop():
         await bot.wait_until_ready()
         while not bot.is_closed():
