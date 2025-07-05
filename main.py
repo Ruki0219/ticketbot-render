@@ -30,6 +30,7 @@ intents.guild_messages = True
 intents.message_content = True
 intents.voice_states = True
 intents.members = True
+intents.presences = True
 
 bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 
@@ -125,12 +126,12 @@ async def on_ready():
                         await enforce_name(channel)
                     except Exception as e:
                         print(f"Loop rename fail: {e}")
-            await asyncio.sleep(10)
+            await asyncio.sleep(2)
     bot.loop.create_task(loop())
 
 @bot.event
 async def on_voice_state_update(member, before, after):
-    await asyncio.sleep(1)
+    await asyncio.sleep(0)
     for vc in set(filter(None, [before.channel, after.channel])):
         await enforce_name(vc)
 
