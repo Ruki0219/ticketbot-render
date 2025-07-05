@@ -166,10 +166,10 @@ async def on_ready():
 async def on_voice_state_update(member, before, after):
     await asyncio.sleep(0.5)
     for vc in set(filter(None, [before.channel, after.channel])):
-    now = time.time()
-    if now - cooldowns.get(vc.id, 0) >= 1.0:
-        cooldowns[vc.id] = now
-        await enforce_name(vc, force=True)
+        now = time.time()
+        if now - cooldowns.get(vc.id, 0) >= 1.0:
+            cooldowns[vc.id] = now
+            await enforce_name(vc, force=True)
 
 @bot.event
 async def on_guild_channel_update(before, after):
