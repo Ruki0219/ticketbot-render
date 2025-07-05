@@ -38,45 +38,29 @@ PROTECTED_FILE = "protected_names.json"
 FORMAT_FILE = "format_fallbacks.json"
 MOD_ROLE_FILE = "mod_roles.json"
 
-if os.path.exists(PROTECTED_FILE):
-    with open(PROTECTED_FILE, "r") as f:
-        ticket_names = json.load(f)
-        ticket_names = {int(gid): {int(cid): name for cid, name in chans.items()} for gid, chans in ticket_names.items()}
-else:
-    ticket_names = {}
+def load_json(file, default):
+    if os.path.exists(file):
+        with open(file, "r") as f:
+            data = json.load(f)
+        return {int(k): {int(ik): iv for ik, iv in v.items()} if isinstance(v, dict) else int(v) for k, v in data.items()}
+    return default
 
-if os.path.exists(FORMAT_FILE):
-    with open(FORMAT_FILE, "r") as f:
-        fallback_formats = json.load(f)
-        fallback_formats = {int(gid): {int(cid): fmt for cid, fmt in chans.items()} for gid, chans in fallback_formats.items()}
-else:
-    fallback_formats = {}
+ticket_names = load_json(PROTECTED_FILE, {})
+fallback_formats = load_json(FORMAT_FILE, {})
+mod_roles = load_json(MOD_ROLE_FILE, {})
 
-if os.path.exists(MOD_ROLE_FILE):
-    with open(MOD_ROLE_FILE, "r") as f:
-        mod_roles = json.load(f)
-        mod_roles = {int(gid): int(rid) for gid, rid in mod_roles.items()}
-else:
-    mod_roles = {}
+def save_json(file, data):
+    with open(file, "w") as f:
+        json.dump({str(k): {str(ik): iv for ik, iv in v.items()} if isinstance(v, dict) else v for k, v in data.items()}, f)
 
-def save_protected():
-    with open(PROTECTED_FILE, "w") as f:
-        json.dump({str(gid): {str(cid): name for cid, name in chans.items()} for gid, chans in ticket_names.items()}, f)
-
-def save_formats():
-    with open(FORMAT_FILE, "w") as f:
-        json.dump({str(gid): {str(cid): fmt for cid, fmt in chans.items()} for gid, chans in fallback_formats.items()}, f)
-
-def save_modroles():
-    with open(MOD_ROLE_FILE, "w") as f:
-        json.dump({str(gid): rid for gid, rid in mod_roles.items()}, f)
+def save_protected(): save_json(PROTECTED_FILE, ticket_names)
+def save_formats(): save_json(FORMAT_FILE, fallback_formats)
+def save_modroles(): save_json(MOD_ROLE_FILE, mod_roles)
 
 # === Helpers ===
 def extract_channel_id(raw):
     match = re.search(r"<#?(\d{17,19})>|(\d{17,19})|channels/\d+/(\d{17,19})", raw)
-    if match:
-        return int(match.group(1) or match.group(2) or match.group(3))
-    return None
+    return int(next(filter(None, match.groups()), None)) if match else None
 
 def get_member_names(channel):
     members = channel.members if hasattr(channel, 'members') else []
@@ -87,9 +71,7 @@ def get_online_count(guild):
 
 def get_online_mods(guild, role_id):
     role = guild.get_role(role_id)
-    if not role:
-        return 0
-    return sum(1 for m in role.members if m.status != discord.Status.offline and not m.bot)
+    return sum(1 for m in role.members if m.status != discord.Status.offline and not m.bot) if role else 0
 
 def format_vc_name(channel, template):
     guild_id = channel.guild.id
@@ -110,8 +92,7 @@ def format_vc_name(channel, template):
             fallback = fallback_formats.get(guild_id, {}).get(channel.id, "{count} in VC")
             return template.replace("{vc}", fallback.replace("{count}", str(count)))
 
-    name = template
-    name = name.replace("{count}", str(count))
+    name = template.replace("{count}", str(count))
     name = name.replace("{online}", str(get_online_count(channel.guild)))
     role_id = mod_roles.get(guild_id)
     if role_id:
@@ -123,7 +104,7 @@ async def enforce_name(channel):
     if guild_id in ticket_names and channel.id in ticket_names[guild_id]:
         raw_locked = ticket_names[guild_id][channel.id]
         name = format_vc_name(channel, raw_locked).replace(' ', '-').lower()
-        name = re.sub(r"[-_]{2,}", "-", name).strip("-")  # normalize name
+        name = re.sub(r"[-_]{2,}", "-", name).strip("-")
         if channel.name != name:
             try:
                 await channel.edit(name=name)
@@ -131,10 +112,21 @@ async def enforce_name(channel):
             except Exception as e:
                 print(f"❌ Failed to rename: {e}")
 
-# === Events ===
+# === Events + Background Loop ===
 @bot.event
 async def on_ready():
     print(f"✅ Logged in as {bot.user}")
+    async def loop():
+        await bot.wait_until_ready()
+        while not bot.is_closed():
+            for guild in bot.guilds:
+                for channel in guild.channels:
+                    try:
+                        await enforce_name(channel)
+                    except Exception as e:
+                        print(f"Loop rename fail: {e}")
+            await asyncio.sleep(10)
+    bot.loop.create_task(loop())
 
 @bot.event
 async def on_voice_state_update(member, before, after):
@@ -147,50 +139,6 @@ async def on_guild_channel_update(before, after):
     await enforce_name(after)
 
 # === Commands ===
-@bot.command()
-async def setformat(ctx, *args):
-    if len(args) < 1:
-        return await ctx.send("⚠️ Usage: !setformat [#channel] <format>")
-    if len(args) == 1:
-        channel = ctx.channel
-        fmt = args[0]
-    else:
-        channel_id = extract_channel_id(args[0])
-        if not channel_id:
-            return await ctx.send("⚠️ Invalid channel reference.")
-        channel = bot.get_channel(channel_id)
-        if not channel:
-            return await ctx.send("⚠️ Could not find the channel.")
-        fmt = ' '.join(args[1:])
-
-    guild_id = ctx.guild.id
-    if guild_id not in ticket_names or channel.id not in ticket_names[guild_id]:
-        return await ctx.send("🚫 You can only set fallback format for locked channels containing dynamic variables.")
-    if guild_id not in fallback_formats:
-        fallback_formats[guild_id] = {}
-    fallback_formats[guild_id][channel.id] = fmt
-    save_formats()
-    await ctx.send(f"✅ Fallback format for <#{channel.id}> set to `{fmt}`.")
-
-@bot.command()
-async def showformat(ctx):
-    guild_id = ctx.guild.id
-    entries = fallback_formats.get(guild_id, {})
-    if not entries:
-        return await ctx.send("ℹ️ No fallback formats set in this server.")
-    msg = "**📐 Channel-Specific Fallback Formats:**\n"
-    for cid, fmt in entries.items():
-        ch = bot.get_channel(cid)
-        label = f"<#{cid}>" if ch else f"(Missing {cid})"
-        msg += f"- {label} ➝ `{fmt}`\n"
-    await ctx.send(msg)
-
-@bot.command()
-async def setmodrole(ctx, role: discord.Role):
-    mod_roles[ctx.guild.id] = role.id
-    save_modroles()
-    await ctx.send(f"🛡️ Set `{role.name}` as the moderator role.")
-
 @bot.command()
 async def help(ctx):
     await ctx.send(
@@ -235,102 +183,120 @@ async def help(ctx):
 async def status(ctx):
     guild_id = ctx.guild.id
     count = len(ticket_names.get(guild_id, {}))
-    await ctx.send(f"✅ I'm online and currently locking {count} channel(s) in this server.")
+    await ctx.send(f"✅ I'm online and locking {count} channel(s).")
 
 @bot.command()
 async def variablelist(ctx):
-    await ctx.send(
-        """**🔧 Available Variables:**
-- `{vc}` ➝ Dynamic VC member names or fallback (e.g. `Ruki`, `Ruki and Jul`, `3 in VC`, etc.)
-- `{count}` ➝ Number of users in VC
-- `{online}` ➝ Total online users in the server
-- `{onlinemods}` ➝ Online members with the mod role
-""")
+    await ctx.send("""**🔧 Available Variables:**
+- `{vc}` ➝ VC member names or fallback (e.g. `Ruki`, `Ruki and Jul`, `3 in VC`)
+- `{count}` ➝ VC member count
+- `{online}` ➝ Online members
+- `{onlinemods}` ➝ Online members with mod role""")
 
 @bot.command()
 async def rename(ctx, *args):
     if len(args) == 1:
-        new_name = args[0].replace(' ', '-').lower()
-        channel = ctx.channel
+        channel, new_name = ctx.channel, args[0]
     elif len(args) >= 2:
         channel_id = extract_channel_id(args[0])
-        if not channel_id:
-            return await ctx.send("⚠️ Invalid channel reference.")
+        if not channel_id: return await ctx.send("⚠️ Invalid channel.")
         channel = bot.get_channel(channel_id)
-        if not channel:
-            return await ctx.send("⚠️ Could not find the channel.")
-        new_name = ' '.join(args[1:]).replace(' ', '-').lower()
+        if not channel: return await ctx.send("⚠️ Channel not found.")
+        new_name = ' '.join(args[1:])
     else:
         return await ctx.send("⚠️ Usage: `!rename [channel] <new name>`")
 
-    guild_id = ctx.guild.id
-    if guild_id in ticket_names and channel.id in ticket_names[guild_id]:
-        locked_name = ticket_names[guild_id][channel.id]
-        return await ctx.send(f"🚫 Rename attempt blocked for <#{channel.id}>.\nName is locked as `{locked_name}`.")
+    new_name = new_name.replace(' ', '-').lower()
+    if ticket_names.get(ctx.guild.id, {}).get(channel.id):
+        return await ctx.send(f"🚫 Cannot rename <#{channel.id}>. It's locked.")
 
     try:
         old_name = channel.name
         await channel.edit(name=new_name)
         await ctx.send(f"✅ Renamed <#{channel.id}> from `{old_name}` to `{new_name}`.")
     except Exception as e:
-        await ctx.send(f"❌ Failed to rename: {e}")
+        await ctx.send(f"❌ Rename failed: {e}")
 
 @bot.command()
 async def lockname(ctx, *args):
     if len(args) == 1:
-        channel = ctx.channel
-        desired_name = args[0]
+        channel, desired_name = ctx.channel, args[0]
     elif len(args) >= 2:
         channel_id = extract_channel_id(args[0])
-        if not channel_id:
-            return await ctx.send("⚠️ Invalid channel reference.")
+        if not channel_id: return await ctx.send("⚠️ Invalid channel.")
         channel = bot.get_channel(channel_id)
-        if not channel:
-            return await ctx.send("⚠️ Could not find the channel.")
+        if not channel: return await ctx.send("⚠️ Channel not found.")
         desired_name = ' '.join(args[1:])
     else:
-        return await ctx.send("⚠️ Usage: `!lockname [channel] <desired-name>`")
+        return await ctx.send("⚠️ Usage: `!lockname [channel] <name>`")
 
     guild_id = ctx.guild.id
-    if guild_id not in ticket_names:
-        ticket_names[guild_id] = {}
-    ticket_names[guild_id][channel.id] = desired_name
+    ticket_names.setdefault(guild_id, {})[channel.id] = desired_name
     save_protected()
-
     await enforce_name(channel)
-    await ctx.send(f"🔐 Locked name of <#{channel.id}> as `{desired_name}`.")
+    await ctx.send(f"🔐 Locked <#{channel.id}> as `{desired_name}`.")
 
 @bot.command()
 async def unlockname(ctx, channel_ref: str = None):
     channel = ctx.channel
     if channel_ref:
         channel_id = extract_channel_id(channel_ref)
-        if not channel_id:
-            return await ctx.send("⚠️ Invalid channel reference.")
+        if not channel_id: return await ctx.send("⚠️ Invalid channel.")
         channel = bot.get_channel(channel_id)
-        if not channel:
-            return await ctx.send("⚠️ Could not find the channel.")
+        if not channel: return await ctx.send("⚠️ Channel not found.")
 
-    guild_id = ctx.guild.id
-    if guild_id in ticket_names and channel.id in ticket_names[guild_id]:
-        del ticket_names[guild_id][channel.id]
+    if ticket_names.get(ctx.guild.id, {}).pop(channel.id, None):
         save_protected()
-        await ctx.send(f"🔓 Unlocked name for <#{channel.id}>.")
+        await ctx.send(f"🔓 Unlocked <#{channel.id}>.")
     else:
-        await ctx.send("⚠️ This channel isn't being auto-renamed or wasn't found.")
+        await ctx.send("⚠️ Channel is not locked.")
 
-@bot.command(name="lockedlist")
+@bot.command()
 async def lockedlist(ctx):
-    guild_id = ctx.guild.id
-    locked = ticket_names.get(guild_id, {})
+    locked = ticket_names.get(ctx.guild.id, {})
     if not locked:
-        return await ctx.send("ℹ️ No channels are currently locked in this server.")
+        return await ctx.send("ℹ️ No locked channels.")
     msg = "**🔒 Locked Channels:**\n"
-    for channel_id, name in locked.items():
-        channel = bot.get_channel(channel_id)
-        label = f"<#{channel_id}>" if channel else f"(Missing {channel_id})"
-        msg += f"- {label} ➝ `{name}`\n"
+    for cid, name in locked.items():
+        ch = bot.get_channel(cid)
+        msg += f"- <#{cid}> ➝ `{name}`\n" if ch else f"- (Missing {cid}) ➝ `{name}`\n"
     await ctx.send(msg)
+
+@bot.command()
+async def setformat(ctx, *args):
+    if not args: return await ctx.send("⚠️ Usage: `!setformat [#channel] <format>`")
+    channel = ctx.channel
+    fmt = args[0] if len(args) == 1 else ' '.join(args[1:])
+    if len(args) >= 2:
+        channel_id = extract_channel_id(args[0])
+        if not channel_id: return await ctx.send("⚠️ Invalid channel.")
+        channel = bot.get_channel(channel_id)
+        if not channel: return await ctx.send("⚠️ Channel not found.")
+
+    if ctx.guild.id not in ticket_names or channel.id not in ticket_names[ctx.guild.id]:
+        return await ctx.send("🚫 Channel must be locked to set a fallback format.")
+
+    fallback_formats.setdefault(ctx.guild.id, {})[channel.id] = fmt
+    save_formats()
+    await ctx.send(f"✅ Fallback format for <#{channel.id}> set to `{fmt}`.")
+
+@bot.command()
+async def showformat(ctx):
+    entries = fallback_formats.get(ctx.guild.id, {})
+    if not entries:
+        return await ctx.send("ℹ️ No fallback formats set.")
+    msg = "**📐 Channel-Specific Fallback Formats:**\n"
+    for cid, fmt in entries.items():
+        ch = bot.get_channel(cid)
+        label = f"<#{cid}>" if ch else f"(Missing {cid})"
+        msg += f"- {label} ➝ `{fmt}`\n"
+    await ctx.send(msg)
+
+@bot.command()
+async def setmodrole(ctx, role: discord.Role):
+    mod_roles[ctx.guild.id] = role.id
+    save_modroles()
+    await ctx.send(f"🛡️ `{role.name}` set as mod role.")
 
 # === Launch bot ===
 keep_alive()
