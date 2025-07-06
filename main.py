@@ -126,7 +126,7 @@ async def enforce_name(channel, force=False):
         else:
             # Static locks: always enforce, but avoid spam
             if channel.name == new_name:
-                if not force and (time.time() - cooldowns.get(channel.id, 0)) < 10:
+                if not force and (time.time() - cooldowns.get(channel.id, 0)) < 4:
                     print(f"🚫 Skipping redundant rename for {channel.name} → {new_name}")
                     return
                 else:
@@ -278,8 +278,8 @@ async def lockname(ctx, *args):
     guild_id = ctx.guild.id
     ticket_names.setdefault(guild_id, {})[channel.id] = desired_name
     save_protected()
-    await enforce_name(channel)
     await ctx.send(f"🔐 Locked <#{channel.id}> as `{desired_name}`.")
+    await enforce_name(channel, force=True)
 
 @bot.command()
 async def unlockname(ctx, channel_ref: str = None):
