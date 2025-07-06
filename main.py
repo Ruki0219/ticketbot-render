@@ -111,70 +111,43 @@ def format_vc_name(channel, template):
 
 async def enforce_name(channel, force=False):
     guild_id = channel.guild.id
-    raw_locked = ticket_names.get(guild_id, {}).get(channel.id)
-    raw_dynamic = dynamic_names.get(guild_id, {}).get(channel.id)
-    if not raw_locked and not raw_dynamic:
-        return
+    if guild_id in ticket_names and channel.id in ticket_names[guild_id]:
+        raw_locked = ticket_names[guild_id][channel.id]
+        is_dynamic = any(var in raw_locked for var in ["{vc}", "{count}", "{online}", "{onlinemods}"])
+        new_name = format_vc_name(channel, raw_locked).replace(' ', '-').lower()
+        new_name = re.sub(r"[-_]{2,}", "-", new_name).strip("-")
 
-    raw_name = raw_locked or raw_dynamic
-    new_name = format_vc_name(channel, raw_name).replace(' ', '-').lower()
-    new_name = re.sub(r"[-_]{2,}", "-", new_name).strip("-")
+        global last_names
 
-    global last_names
+        if is_dynamic:
+            if not force and last_names.get(channel.id) == new_name:
+                print(f"⏳ No rename needed for {channel.name} (name unchanged)")
+                return
 
-    if not force and last_names.get(channel.id) == new_name:
-        print(f"⏳ No rename needed for {channel.name} (name unchanged)")
-        return
+            if channel.name == new_name:
+                print(f"🚫 Skipping redundant rename for {channel.name} → {new_name}")
+                last_names[channel.id] = new_name
+                return
 
-    if channel.name == new_name:
-        print(f"🚫 Skipping redundant rename for {channel.name} → {new_name}")
-        last_names[channel.id] = new_name
-        return
+            now = time.time()
+            if now - cooldowns.get(channel.id, 0) < 1.0:
+                print(f"🕒 Skipped rename due to cooldown: {channel.name}")
+                return
+        else:
+            # Static locks: always enforce
+            if channel.name != new_name:
+                print(f"🔐 Enforcing static lock for {channel.name} → {new_name}")
+            else:
+                print(f"🔁 Reapplying static lock for {channel.name} (name already correct)")
 
-    now = time.time()
-    if now - cooldowns.get(channel.id, 0) < 1.0:
-        print(f"🕒 Skipped rename due to cooldown: {channel.name}")
-        return
+        cooldowns[channel.id] = time.time()
 
-    cooldowns[channel.id] = now
-
-    try:
-        await channel.edit(name=new_name)
-        last_names[channel.id] = new_name
-        print(f"🔁 Enforced rename: {channel.name} → {new_name}")
-    except Exception as e:
-        print(f"❌ Rename failed for {channel.name}: {e}")
-
-# === Events + Background Loop ===
-@bot.event
-async def on_ready():
-    print(f"✅ Logged in as {bot.user}")
-    last_names.clear()
-    print("🧼 Cleared last_names cache on startup")
-
-    async def loop():
-        await bot.wait_until_ready()
-        while not bot.is_closed():
-            for guild in bot.guilds:
-                for channel in guild.channels:
-                    try:
-                        raw_locked = ticket_names.get(guild.id, {}).get(channel.id)
-                        if not raw_locked:
-                            continue  # not locked at all
-
-                        is_dynamic = any(var in raw_locked for var in ["{vc}", "{count}", "{online}", "{onlinemods}"])
-                        
-                        # Only enforce if cooldown passed
-                        if time.time() - cooldowns.get(channel.id, 0) >= 1.0:
-                            cooldowns[channel.id] = time.time()
-                            await enforce_name(channel, force=is_dynamic)
-                    
-                    except Exception as e:
-                        print(f"Loop rename fail: {e}")
-
-            await asyncio.sleep(1.5)
-
-    bot.loop.create_task(loop())
+        try:
+            await channel.edit(name=new_name)
+            last_names[channel.id] = new_name
+            print(f"✅ Renamed {channel.name} → {new_name}")
+        except Exception as e:
+            print(f"❌ Rename failed for {channel.name}: {e}")
 
 @bot.event
 async def on_voice_state_update(member, before, after):
