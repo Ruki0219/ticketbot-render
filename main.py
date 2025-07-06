@@ -199,57 +199,6 @@ async def on_member_update(before, after):
                         cooldowns[channel.id] = now
                         await enforce_name(channel)
 
-@bot.command()
-async def dyname(ctx, *args):
-    if not args:
-        return await ctx.send("⚠️ Please provide a variable-based name. Example: `!dyname {vc}`")
-
-    # Determine target channel
-    first_arg = args[0]
-    name_parts = args[1:] if extract_channel_id(first_arg) else args
-    raw = extract_channel_id(first_arg) if extract_channel_id(first_arg) else ctx.channel.id
-    channel = ctx.guild.get_channel(raw)
-
-    if not channel:
-        return await ctx.send("❌ Could not find that channel.")
-
-    new_name = ' '.join(name_parts) if name_parts else first_arg
-    if not any(v in new_name for v in ["{vc}", "{count}", "{online}", "{onlinemods}"]):
-        return await ctx.send("⚠️ You must include a variable like `{vc}`, `{count}`, `{online}`, or `{onlinemods}` in the name.")
-
-    if ctx.guild.id not in ticket_names:
-        ticket_names[ctx.guild.id] = {}
-    ticket_names[ctx.guild.id][channel.id] = new_name
-    save_protected()
-    await enforce_name(channel, force=True)
-    await ctx.send(f"✨ Dynamic naming set for {channel.mention} → `{new_name}`")
-
-
-@bot.command()
-async def undyname(ctx, target=None):
-    raw = extract_channel_id(target) if target else ctx.channel.id
-    channel = ctx.guild.get_channel(raw)
-    if not channel:
-        return await ctx.send("❌ Could not find that channel.")
-
-    if ctx.guild.id in ticket_names and raw in ticket_names[ctx.guild.id]:
-        del ticket_names[ctx.guild.id][raw]
-        save_protected()
-        await ctx.send(f"❌ Removed dynamic name protection for {channel.mention}")
-    else:
-        await ctx.send("⚠️ That channel was not dynamically renamed.")
-
-
-@bot.command()
-async def resetformat(ctx, target=None):
-    raw = extract_channel_id(target) if target else ctx.channel.id
-    if ctx.guild.id in fallback_formats and raw in fallback_formats[ctx.guild.id]:
-        del fallback_formats[ctx.guild.id][raw]
-        save_formats()
-        await ctx.send(f"🧹 Reset fallback format for <#{raw}>")
-    else:
-        await ctx.send("⚠️ No fallback format was set for that channel.")
-
 # === Commands ===
 @bot.command()
 async def help(ctx):
