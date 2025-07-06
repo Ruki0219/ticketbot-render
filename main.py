@@ -158,16 +158,20 @@ async def on_ready():
             for guild in bot.guilds:
                 for channel in guild.channels:
                     try:
-                        raw_name = dynamic_names.get(guild.id, {}).get(channel.id)
-                        if raw_name:
-                            is_dynamic = any(var in raw_name for var in ["{vc}", "{count}", "{online}", "{onlinemods}"])
-                            if is_dynamic:
-                                now = time.time()
-                                if now - cooldowns.get(channel.id, 0) >= 1.0:
-                                    cooldowns[channel.id] = now
-                                    await enforce_name(channel, force=True)
+                        raw_locked = ticket_names.get(guild.id, {}).get(channel.id)
+                        if not raw_locked:
+                            continue  # not locked at all
+
+                        is_dynamic = any(var in raw_locked for var in ["{vc}", "{count}", "{online}", "{onlinemods}"])
+                        
+                        # Only enforce if cooldown passed
+                        if time.time() - cooldowns.get(channel.id, 0) >= 1.0:
+                            cooldowns[channel.id] = time.time()
+                            await enforce_name(channel, force=is_dynamic)
+                    
                     except Exception as e:
                         print(f"Loop rename fail: {e}")
+
             await asyncio.sleep(1.5)
 
     bot.loop.create_task(loop())
