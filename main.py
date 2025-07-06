@@ -123,23 +123,18 @@ async def enforce_name(channel, force=False):
             if not force and last_names.get(channel.id) == new_name:
                 print(f"⏳ No rename needed for {channel.name} (name unchanged)")
                 return
-
-            if channel.name == new_name:
-                print(f"🚫 Skipping redundant rename for {channel.name} → {new_name}")
-                last_names[channel.id] = new_name
-                return
-
-            now = time.time()
-            if now - cooldowns.get(channel.id, 0) < 1.0:
-                print(f"🕒 Skipped rename due to cooldown: {channel.name}")
-                return
         else:
-            # Static locks: always enforce
-            if channel.name != new_name:
-                print(f"🔐 Enforcing static lock for {channel.name} → {new_name}")
+            # Static locks: always enforce, but avoid spam
+            if channel.name == new_name:
+                if not force and (time.time() - cooldowns.get(channel.id, 0)) < 10:
+                    print(f"🚫 Skipping redundant rename for {channel.name} → {new_name}")
+                    return
+                else:
+                    print(f"🔁 Reapplying static lock for {channel.name} (name already correct)")
             else:
-                print(f"🔁 Reapplying static lock for {channel.name} (name already correct)")
+                print(f"🔐 Enforcing static lock for {channel.name} → {new_name}")
 
+        # Update cooldown and rename
         cooldowns[channel.id] = time.time()
 
         try:
