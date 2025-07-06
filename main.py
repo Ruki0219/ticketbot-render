@@ -172,10 +172,14 @@ async def on_ready():
 @bot.event
 async def on_voice_state_update(member, before, after):
     await asyncio.sleep(0.5)
-    for vc in set(filter(None, [before.channel, after.channel])):
-        now = time.time()
-        if now - cooldowns.get(vc.id, 0) >= 1.0:
-            cooldowns[vc.id] = now
+    affected_channels = set(filter(None, [before.channel, after.channel]))
+
+    for vc in affected_channels:
+        members = [m.display_name for m in vc.members]
+        member_snapshot = ','.join(members)
+
+        if getattr(vc, "_last_member_snapshot", None) != member_snapshot:
+            vc._last_member_snapshot = member_snapshot  # update last seen
             await enforce_name(vc, force=True)
 
 @bot.event
