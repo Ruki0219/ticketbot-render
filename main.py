@@ -42,6 +42,7 @@ bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 PROTECTED_FILE = "protected_names.json"
 FORMAT_FILE = "format_fallbacks.json"
 MOD_ROLE_FILE = "mod_roles.json"
+DYNAMIC_FILE = "dynamic_names.json"
 
 def load_json(file, default):
     if os.path.exists(file):
@@ -53,6 +54,7 @@ def load_json(file, default):
 ticket_names = load_json(PROTECTED_FILE, {})
 fallback_formats = load_json(FORMAT_FILE, {})
 mod_roles = load_json(MOD_ROLE_FILE, {})
+dynamic_names = load_json(DYNAMIC_FILE, {})
 cooldowns = {}
 last_names = {}
 
@@ -63,6 +65,7 @@ def save_json(file, data):
 def save_protected(): save_json(PROTECTED_FILE, ticket_names)
 def save_formats(): save_json(FORMAT_FILE, fallback_formats)
 def save_modroles(): save_json(MOD_ROLE_FILE, mod_roles)
+def save_dynamic(): save_json(DYNAMIC_FILE, dynamic_names)
 
 # === Helpers ===
 def extract_channel_id(raw):
@@ -108,35 +111,39 @@ def format_vc_name(channel, template):
 
 async def enforce_name(channel, force=False):
     guild_id = channel.guild.id
-    if guild_id in ticket_names and channel.id in ticket_names[guild_id]:
-        raw_locked = ticket_names[guild_id][channel.id]
-        new_name = format_vc_name(channel, raw_locked).replace(' ', '-').lower()
-        new_name = re.sub(r"[-_]{2,}", "-", new_name).strip("-")
+    raw_locked = ticket_names.get(guild_id, {}).get(channel.id)
+    raw_dynamic = dynamic_names.get(guild_id, {}).get(channel.id)
+    if not raw_locked and not raw_dynamic:
+        return
 
-        global last_names
+    raw_name = raw_locked or raw_dynamic
+    new_name = format_vc_name(channel, raw_name).replace(' ', '-').lower()
+    new_name = re.sub(r"[-_]{2,}", "-", new_name).strip("-")
 
-        if not force and last_names.get(channel.id) == new_name:
-            print(f"⏳ No rename needed for {channel.name} (name unchanged)")
-            return
+    global last_names
 
-        if channel.name == new_name:
-            print(f"🚫 Skipping redundant rename for {channel.name} → {new_name}")
-            last_names[channel.id] = new_name
-            return  # ⛔ RETURN HERE so cooldown is NOT updated!
+    if not force and last_names.get(channel.id) == new_name:
+        print(f"⏳ No rename needed for {channel.name} (name unchanged)")
+        return
 
-        now = time.time()
-        if now - cooldowns.get(channel.id, 0) < 1.0:
-            print(f"🕒 Skipped rename due to cooldown: {channel.name}")
-            return
+    if channel.name == new_name:
+        print(f"🚫 Skipping redundant rename for {channel.name} → {new_name}")
+        last_names[channel.id] = new_name
+        return
 
-        cooldowns[channel.id] = now
+    now = time.time()
+    if now - cooldowns.get(channel.id, 0) < 1.0:
+        print(f"🕒 Skipped rename due to cooldown: {channel.name}")
+        return
 
-        try:
-            await channel.edit(name=new_name)
-            last_names[channel.id] = new_name
-            print(f"🔁 Enforced rename: {channel.name} → {new_name}")
-        except Exception as e:
-            print(f"❌ Rename failed for {channel.name}: {e}")
+    cooldowns[channel.id] = now
+
+    try:
+        await channel.edit(name=new_name)
+        last_names[channel.id] = new_name
+        print(f"🔁 Enforced rename: {channel.name} → {new_name}")
+    except Exception as e:
+        print(f"❌ Rename failed for {channel.name}: {e}")
 
 # === Events + Background Loop ===
 @bot.event
@@ -151,35 +158,29 @@ async def on_ready():
             for guild in bot.guilds:
                 for channel in guild.channels:
                     try:
-                        raw_locked = ticket_names.get(guild.id, {}).get(channel.id)
-                        if not raw_locked:
-                            continue  # skip if not locked
-
-                        is_dynamic = any(var in raw_locked for var in ["{vc}", "{count}", "{online}", "{onlinemods}"])
-                        if is_dynamic:
-                            now = time.time()
-                            if now - cooldowns.get(channel.id, 0) >= 1.0:
-                                cooldowns[channel.id] = now
-                                await enforce_name(channel, force=True)
-
+                        raw_name = dynamic_names.get(guild.id, {}).get(channel.id)
+                        if raw_name:
+                            is_dynamic = any(var in raw_name for var in ["{vc}", "{count}", "{online}", "{onlinemods}"])
+                            if is_dynamic:
+                                now = time.time()
+                                if now - cooldowns.get(channel.id, 0) >= 1.0:
+                                    cooldowns[channel.id] = now
+                                    await enforce_name(channel, force=True)
                     except Exception as e:
                         print(f"Loop rename fail: {e}")
-
             await asyncio.sleep(1.5)
-    
+
     bot.loop.create_task(loop())
 
 @bot.event
 async def on_voice_state_update(member, before, after):
     await asyncio.sleep(0.5)
     affected_channels = set(filter(None, [before.channel, after.channel]))
-
     for vc in affected_channels:
         members = [m.display_name for m in vc.members]
         member_snapshot = ','.join(members)
-
         if getattr(vc, "_last_member_snapshot", None) != member_snapshot:
-            vc._last_member_snapshot = member_snapshot  # update last seen
+            vc._last_member_snapshot = member_snapshot
             await enforce_name(vc, force=True)
 
 @bot.event
@@ -188,9 +189,8 @@ async def on_guild_channel_update(before, after):
 
 @bot.event
 async def on_member_update(before, after):
-    # Re-check all locked channels with presence variables when a user goes offline/online
     for guild in bot.guilds:
-        for channel_id, raw_name in ticket_names.get(guild.id, {}).items():
+        for channel_id, raw_name in dynamic_names.get(guild.id, {}).items():
             if any(v in raw_name for v in ["{online}", "{onlinemods}"]):
                 channel = bot.get_channel(channel_id)
                 if channel:
@@ -198,6 +198,57 @@ async def on_member_update(before, after):
                     if now - cooldowns.get(channel.id, 0) >= 1.0:
                         cooldowns[channel.id] = now
                         await enforce_name(channel)
+
+@bot.command()
+async def dyname(ctx, *args):
+    if not args:
+        return await ctx.send("⚠️ Please provide a variable-based name. Example: `!dyname {vc}`")
+
+    # Determine target channel
+    first_arg = args[0]
+    name_parts = args[1:] if extract_channel_id(first_arg) else args
+    raw = extract_channel_id(first_arg) if extract_channel_id(first_arg) else ctx.channel.id
+    channel = ctx.guild.get_channel(raw)
+
+    if not channel:
+        return await ctx.send("❌ Could not find that channel.")
+
+    new_name = ' '.join(name_parts) if name_parts else first_arg
+    if not any(v in new_name for v in ["{vc}", "{count}", "{online}", "{onlinemods}"]):
+        return await ctx.send("⚠️ You must include a variable like `{vc}`, `{count}`, `{online}`, or `{onlinemods}` in the name.")
+
+    if ctx.guild.id not in ticket_names:
+        ticket_names[ctx.guild.id] = {}
+    ticket_names[ctx.guild.id][channel.id] = new_name
+    save_protected()
+    await enforce_name(channel, force=True)
+    await ctx.send(f"✨ Dynamic naming set for {channel.mention} → `{new_name}`")
+
+
+@bot.command()
+async def undyname(ctx, target=None):
+    raw = extract_channel_id(target) if target else ctx.channel.id
+    channel = ctx.guild.get_channel(raw)
+    if not channel:
+        return await ctx.send("❌ Could not find that channel.")
+
+    if ctx.guild.id in ticket_names and raw in ticket_names[ctx.guild.id]:
+        del ticket_names[ctx.guild.id][raw]
+        save_protected()
+        await ctx.send(f"❌ Removed dynamic name protection for {channel.mention}")
+    else:
+        await ctx.send("⚠️ That channel was not dynamically renamed.")
+
+
+@bot.command()
+async def resetformat(ctx, target=None):
+    raw = extract_channel_id(target) if target else ctx.channel.id
+    if ctx.guild.id in fallback_formats and raw in fallback_formats[ctx.guild.id]:
+        del fallback_formats[ctx.guild.id][raw]
+        save_formats()
+        await ctx.send(f"🧹 Reset fallback format for <#{raw}>")
+    else:
+        await ctx.send("⚠️ No fallback format was set for that channel.")
 
 # === Commands ===
 @bot.command()
@@ -227,18 +278,30 @@ async def help(ctx):
 **📃 !lockedlist**
 ➝ Shows all currently locked channels and their names.
 
+**✨ !dyname**
+`!dyname {vc}` ➝ Enables dynamic renaming for the current channel.  
+`!dyname #channel {online}` ➝ Enables dynamic renaming for a specific channel (VCs and Text Channels).
+
+**❌ !undyname**
+`!undyname` ➝ Stops dynamic renaming for the current channel.  
+`!undyname #channel` ➝ Stops dynamic renaming for a specific channel (VCs and Text Channels).
+
+**🔧 !variablelist**
+➝ Shows available dynamic name variables to use for the !dyname command.
+
 **📐 !setformat**
-`!setformat format` ➝ Set fallback format for this channel.
-`!setformat #channel format` ➝ Set fallback format for another channel.
+`!setformat format` ➝ Set fallback format for the current channel.
+`!setformat #channel format` ➝ Set fallback format for a specific channel.
+
+**🧹 !resetformat**
+`!resetformat` ➝ Removes fallback format from the current channel.  
+`!resetformat #channel` ➝ Removes fallback format from a specific channel (VCs and Text Channels).
 
 **📊 !showformat**
 ➝ Shows all channels with a custom fallback format.
 
 **🛡️ !setmodrole [role]**
-➝ Set which role is treated as moderator for {onlinemods}.
-
-**🔧 !variablelist**
-➝ Shows available dynamic name variables.""")
+➝ Set which role is treated as moderator for {onlinemods}.""")
 
 @bot.command()
 async def status(ctx):
@@ -323,6 +386,17 @@ async def lockedlist(ctx):
         msg += f"- <#{cid}> ➝ `{name}`\n" if ch else f"- (Missing {cid}) ➝ `{name}`\n"
     await ctx.send(msg)
 
+@bot.command()
+async def dyname(ctx, *, name):
+    channel = ctx.channel
+    guild_id = ctx.guild.id
+    if guild_id not in dynamic_names:
+        dynamic_names[guild_id] = {}
+    dynamic_names[guild_id][channel.id] = name
+    save_dynamic()
+    await ctx.send(f"✅ This channel will now auto-update using: `{name}`")
+    await enforce_name(channel, force=True)
+    
 @bot.command()
 async def setformat(ctx, *args):
     if not args: return await ctx.send("⚠️ Usage: `!setformat [#channel] <format>`")
