@@ -1,5 +1,3 @@
-# ✅ Cleaned and finalized full bot code with all features
-
 import discord
 from discord.ext import commands
 import os
@@ -16,6 +14,7 @@ rename_tasks = {}
 cooldowns = defaultdict(lambda: 0)
 
 # === Flask keep_alive setup ===
+
 app = Flask(__name__)
 
 @app.route('/')
@@ -30,200 +29,97 @@ def keep_alive():
     t.start()
 
 # === Bot setup ===
+
 intents = discord.Intents.default()
 intents.guilds = True
 intents.guild_messages = True
 intents.message_content = True
 intents.voice_states = True
 intents.members = True
-intents.presences = True
 
 bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 
 # === Load data ===
+
 PROTECTED_FILE = "protected_names.json"
-FORMAT_FILE = "format_fallbacks.json"
 MOD_ROLE_FILE = "mod_roles.json"
-DYNAMIC_FILE = "dynamic_names.json"
 
 def load_json(file, default):
     if os.path.exists(file):
         with open(file, "r") as f:
             data = json.load(f)
-        return {int(k): {int(ik): iv for ik, iv in v.items()} if isinstance(v, dict) else int(v) for k, v in data.items()}
+            return {int(k): v for k, v in data.items()}
     return default
 
 ticket_names = load_json(PROTECTED_FILE, {})
-fallback_formats = load_json(FORMAT_FILE, {})
 mod_roles = load_json(MOD_ROLE_FILE, {})
-dynamic_names = load_json(DYNAMIC_FILE, {})
-cooldowns = {}
-last_names = {}
 
 def save_json(file, data):
     with open(file, "w") as f:
-        json.dump({str(k): {str(ik): iv for ik, iv in v.items()} if isinstance(v, dict) else v for k, v in data.items()}, f)
+        json.dump({str(k): v for k, v in data.items()}, f)
 
-def save_protected(): save_json(PROTECTED_FILE, ticket_names)
-def save_formats(): save_json(FORMAT_FILE, fallback_formats)
-def save_modroles(): save_json(MOD_ROLE_FILE, mod_roles)
-def save_dynamic(): save_json(DYNAMIC_FILE, dynamic_names)
+def save_protected():
+    save_json(PROTECTED_FILE, ticket_names)
 
-# === Helpers ===
-def extract_channel_id(raw):
-    match = re.search(r"<#?(\d{17,19})>|(\d{17,19})|channels/\d+/(\d{17,19})", raw)
-    return int(next(filter(None, match.groups()), None)) if match else None
+def save_modroles():
+    save_json(MOD_ROLE_FILE, mod_roles)
 
-def get_member_names(channel):
-    members = channel.members if hasattr(channel, 'members') else []
-    return [m.display_name for m in members if not m.bot]
-
-def get_online_count(guild):
-    return sum(1 for m in guild.members if not m.bot and m.status != discord.Status.offline)
-
-def get_online_mods(guild, role_id):
-    role = guild.get_role(role_id)
-    return sum(1 for m in role.members if m.status != discord.Status.offline and not m.bot) if role else 0
-
-def format_vc_name(channel, template):
-    guild_id = channel.guild.id
-    members = get_member_names(channel)
-    count = len(members)
-
-    if "{vc}" in template:
-        if count == 0:
-            fallback = fallback_formats.get(guild_id, {}).get(channel.id, "no one in VC")
-            return template.replace("{vc}", fallback)
-        elif count == 1:
-            return template.replace("{vc}", members[0])
-        elif count == 2:
-            return template.replace("{vc}", f"{members[0]} and {members[1]}")
-        elif count == 3:
-            return template.replace("{vc}", f"{members[0]}, {members[1]}, and {members[2]}")
-        else:
-            fallback = fallback_formats.get(guild_id, {}).get(channel.id, "{count} in VC")
-            return template.replace("{vc}", fallback.replace("{count}", str(count)))
-
-    name = template.replace("{count}", str(count))
-    name = name.replace("{online}", str(get_online_count(channel.guild)))
-    role_id = mod_roles.get(guild_id)
-    if role_id:
-        name = name.replace("{onlinemods}", str(get_online_mods(channel.guild, role_id)))
-    return name
+# === Enforce name ===
 
 async def enforce_name(channel, force=False):
     guild_id = channel.guild.id
     if guild_id in ticket_names and channel.id in ticket_names[guild_id]:
-        raw_locked = ticket_names[guild_id][channel.id]
-        is_dynamic = any(var in raw_locked for var in ["{vc}", "{count}", "{online}", "{onlinemods}"])
-        new_name = format_vc_name(channel, raw_locked).replace(' ', '-').lower()
+        new_name = ticket_names[guild_id][channel.id].replace(' ', '-').lower()
         new_name = re.sub(r"[-_]{2,}", "-", new_name).strip("-")
 
-        global last_names
-
-        if is_dynamic:
-            if not force and last_names.get(channel.id) == new_name:
-                print(f"⏳ No rename needed for {channel.name} (name unchanged)")
+        if channel.name == new_name:
+            if not force and (time.time() - cooldowns.get(channel.id, 0)) < 10:
+                print(f"❌ Skipping redundant rename for {channel.name} → {new_name}")
                 return
-        else:
-            # Static locks: always enforce, but avoid spam
-            if channel.name == new_name:
-                if not force and (time.time() - cooldowns.get(channel.id, 0)) < 4:
-                    print(f"🚫 Skipping redundant rename for {channel.name} → {new_name}")
-                    return
-                else:
-                    print(f"🔁 Reapplying static lock for {channel.name} (name already correct)")
             else:
-                print(f"🔐 Enforcing static lock for {channel.name} → {new_name}")
+                print(f"🔁 Reapplying static lock for {channel.name} (name already correct)")
+        else:
+            print(f"🔐 Enforcing static lock for {channel.name} → {new_name}")
 
-        # Update cooldown and rename
         cooldowns[channel.id] = time.time()
 
         try:
             await queue_rename(channel, new_name)
-            print(f"✅ Renamed {channel.name} → {new_name}")
         except Exception as e:
             print(f"❌ Rename failed for {channel.name}: {e}")
-
-@bot.event
-async def on_voice_state_update(member, before, after):
-    await asyncio.sleep(0.5)
-    affected_channels = set(filter(None, [before.channel, after.channel]))
-    for vc in affected_channels:
-        members = [m.display_name for m in vc.members]
-        member_snapshot = ','.join(members)
-        if getattr(vc, "_last_member_snapshot", None) != member_snapshot:
-            vc._last_member_snapshot = member_snapshot
-            await enforce_name(vc, force=True)
 
 @bot.event
 async def on_guild_channel_update(before, after):
     await enforce_name(after)
 
-@bot.event
-async def on_member_update(before, after):
-    for guild in bot.guilds:
-        for channel_id, raw_name in dynamic_names.get(guild.id, {}).items():
-            if any(v in raw_name for v in ["{online}", "{onlinemods}"]):
-                channel = bot.get_channel(channel_id)
-                if channel:
-                    now = time.time()
-                    if now - cooldowns.get(channel.id, 0) >= 1.0:
-                        cooldowns[channel.id] = now
-                        await enforce_name(channel)
+# === Mod Role Check ===
+
+def is_mod(ctx):
+    allowed_roles = mod_roles.get(ctx.guild.id, [])
+    return any(role.id in allowed_roles for role in ctx.author.roles)
 
 # === Commands ===
+
 @bot.command()
 async def help(ctx):
-    await ctx.send(
-        """**📜 Renamer Bot – Command List**
-➡️ You can use channel mentions (like `#channel`), links, or raw channel IDs.
+    await ctx.send("""\n📜 Renamer Bot – Command List
+➡️ You can use channel mentions (like #channel), links, or raw channel IDs.
 
-**🆘 !help**
-➝ Shows this help message.
+🚘 !help ➔ Shows this help message.
 
-**✅ !status**
-➝ Shows if the bot is online and how many channels are locked.
+✅ !status ➔ Shows if the bot is online and how many channels are locked.
 
-**✏️ !rename**
-`!rename new-name` ➝ Renames the current channel.
-`!rename #channel new-name` ➝ Renames a specific channel.
+✏️ !rename [channel] <new name> ➔ Renames a channel.
 
-**🔒 !lockname**
-`!lockname desired-name` ➝ Locks the *current channel*.
-`!lockname #channel desired-name` ➝ Locks a *specific channel*.
+🔒 !lockname [channel] <name> ➔ Locks a channel name.
 
-**🔓 !unlockname**
-`!unlockname` ➝ Unlocks the *current channel*.
-`!unlockname #channel` ➝ Unlocks a *specific channel*.
+🔓 !unlockname [channel] ➔ Unlocks a locked channel.
 
-**📃 !lockedlist**
-➝ Shows all currently locked channels and their names.
+📃 !lockedlist ➔ Shows all currently locked channels.
 
-**✨ !dyname**
-`!dyname {vc}` ➝ Enables dynamic renaming for the current channel.  
-`!dyname #channel {online}` ➝ Enables dynamic renaming for a specific channel (VCs and Text Channels).
-
-**❌ !undyname**
-`!undyname` ➝ Stops dynamic renaming for the current channel.  
-`!undyname #channel` ➝ Stops dynamic renaming for a specific channel (VCs and Text Channels).
-
-**🔧 !variablelist**
-➝ Shows available dynamic name variables to use for the !dyname command.
-
-**📐 !setformat**
-`!setformat format` ➝ Set fallback format for the current channel.
-`!setformat #channel format` ➝ Set fallback format for a specific channel.
-
-**🧹 !resetformat**
-`!resetformat` ➝ Removes fallback format from the current channel.  
-`!resetformat #channel` ➝ Removes fallback format from a specific channel (VCs and Text Channels).
-
-**📊 !showformat**
-➝ Shows all channels with a custom fallback format.
-
-**🛡️ !setmodrole [role]**
-➝ Set which role is treated as moderator for {onlinemods}.""")
+🛡️ !setmodrole [role] ➔ Add a role that can use bot commands.
+🧹 !removemodrole [role] ➔ Remove a mod role.
+📋 !viewmodlist ➔ See current mod roles.""")
 
 @bot.command()
 async def status(ctx):
@@ -232,29 +128,25 @@ async def status(ctx):
     await ctx.send(f"✅ I'm online and locking {count} channel(s).")
 
 @bot.command()
-async def variablelist(ctx):
-    await ctx.send("""**🔧 Available Variables:**
-- `{vc}` ➝ VC member names or fallback (e.g. `Ruki`, `Ruki and Jul`, `3 in VC`)
-- `{count}` ➝ VC member count
-- `{online}` ➝ Online members
-- `{onlinemods}` ➝ Online members with mod role""")
-
-@bot.command()
 async def rename(ctx, *args):
+    if not is_mod(ctx): return await ctx.send("⛔ You don't have permission to use this.")
+
     if len(args) == 1:
         channel, new_name = ctx.channel, args[0]
     elif len(args) >= 2:
         channel_id = extract_channel_id(args[0])
-        if not channel_id: return await ctx.send("⚠️ Invalid channel.")
+        if not channel_id:
+            return await ctx.send("⚠️ Invalid channel.")
         channel = bot.get_channel(channel_id)
-        if not channel: return await ctx.send("⚠️ Channel not found.")
+        if not channel:
+            return await ctx.send("⚠️ Channel not found.")
         new_name = ' '.join(args[1:])
     else:
-        return await ctx.send("⚠️ Usage: `!rename [channel] <new name>`")
+        return await ctx.send("⚠️ Usage: !rename [channel] <new name>")
 
     new_name = new_name.replace(' ', '-').lower()
     if ticket_names.get(ctx.guild.id, {}).get(channel.id):
-        return await ctx.send(f"🚫 Cannot rename <#{channel.id}>. It's locked.")
+        return await ctx.send(f"❌ Cannot rename <#{channel.id}>. It's locked.")
 
     try:
         old_name = channel.name
@@ -265,16 +157,20 @@ async def rename(ctx, *args):
 
 @bot.command()
 async def lockname(ctx, *args):
+    if not is_mod(ctx): return await ctx.send("⛔ You don't have permission to use this.")
+
     if len(args) == 1:
         channel, desired_name = ctx.channel, args[0]
     elif len(args) >= 2:
         channel_id = extract_channel_id(args[0])
-        if not channel_id: return await ctx.send("⚠️ Invalid channel.")
+        if not channel_id:
+            return await ctx.send("⚠️ Invalid channel.")
         channel = bot.get_channel(channel_id)
-        if not channel: return await ctx.send("⚠️ Channel not found.")
+        if not channel:
+            return await ctx.send("⚠️ Channel not found.")
         desired_name = ' '.join(args[1:])
     else:
-        return await ctx.send("⚠️ Usage: `!lockname [channel] <name>`")
+        return await ctx.send("⚠️ Usage: !lockname [channel] <name>")
 
     guild_id = ctx.guild.id
     ticket_names.setdefault(guild_id, {})[channel.id] = desired_name
@@ -284,12 +180,16 @@ async def lockname(ctx, *args):
 
 @bot.command()
 async def unlockname(ctx, channel_ref: str = None):
+    if not is_mod(ctx): return await ctx.send("⛔ You don't have permission to use this.")
+
     channel = ctx.channel
     if channel_ref:
         channel_id = extract_channel_id(channel_ref)
-        if not channel_id: return await ctx.send("⚠️ Invalid channel.")
+        if not channel_id:
+            return await ctx.send("⚠️ Invalid channel.")
         channel = bot.get_channel(channel_id)
-        if not channel: return await ctx.send("⚠️ Channel not found.")
+        if not channel:
+            return await ctx.send("⚠️ Channel not found.")
 
     if ticket_names.get(ctx.guild.id, {}).pop(channel.id, None):
         save_protected()
@@ -302,93 +202,73 @@ async def lockedlist(ctx):
     locked = ticket_names.get(ctx.guild.id, {})
     if not locked:
         return await ctx.send("ℹ️ No locked channels.")
-    msg = "**🔒 Locked Channels:**\n"
+    msg = "🔒 Locked Channels:\n"
     for cid, name in locked.items():
         ch = bot.get_channel(cid)
-        msg += f"- <#{cid}> ➝ `{name}`\n" if ch else f"- (Missing {cid}) ➝ `{name}`\n"
-    await ctx.send(msg)
-
-@bot.command()
-async def dyname(ctx, *, name):
-    channel = ctx.channel
-    guild_id = ctx.guild.id
-    if guild_id not in dynamic_names:
-        dynamic_names[guild_id] = {}
-    dynamic_names[guild_id][channel.id] = name
-    save_dynamic()
-    await ctx.send(f"✅ This channel will now auto-update using: `{name}`")
-    await enforce_name(channel, force=True)
-    
-@bot.command()
-async def setformat(ctx, *args):
-    if not args: return await ctx.send("⚠️ Usage: `!setformat [#channel] <format>`")
-    channel = ctx.channel
-    fmt = args[0] if len(args) == 1 else ' '.join(args[1:])
-    if len(args) >= 2:
-        channel_id = extract_channel_id(args[0])
-        if not channel_id: return await ctx.send("⚠️ Invalid channel.")
-        channel = bot.get_channel(channel_id)
-        if not channel: return await ctx.send("⚠️ Channel not found.")
-
-    if ctx.guild.id not in ticket_names or channel.id not in ticket_names[ctx.guild.id]:
-        return await ctx.send("🚫 Channel must be locked to set a fallback format.")
-
-    fallback_formats.setdefault(ctx.guild.id, {})[channel.id] = fmt
-    save_formats()
-    await ctx.send(f"✅ Fallback format for <#{channel.id}> set to `{fmt}`.")
-
-@bot.command()
-async def showformat(ctx):
-    entries = fallback_formats.get(ctx.guild.id, {})
-    if not entries:
-        return await ctx.send("ℹ️ No fallback formats set.")
-    msg = "**📐 Channel-Specific Fallback Formats:**\n"
-    for cid, fmt in entries.items():
-        ch = bot.get_channel(cid)
-        label = f"<#{cid}>" if ch else f"(Missing {cid})"
-        msg += f"- {label} ➝ `{fmt}`\n"
+        msg += f"- <#{cid}> ➝ {name}\n" if ch else f"- (Missing {cid}) ➝ {name}\n"
     await ctx.send(msg)
 
 @bot.command()
 async def setmodrole(ctx, role: discord.Role):
-    mod_roles[ctx.guild.id] = role.id
+    mod_roles.setdefault(ctx.guild.id, [])
+    if role.id in mod_roles[ctx.guild.id]:
+        return await ctx.send(f"ℹ️ {role.name} is already a mod role.")
+    mod_roles[ctx.guild.id].append(role.id)
     save_modroles()
-    await ctx.send(f"🛡️ `{role.name}` set as mod role.")
+    await ctx.send(f"🛡️ {role.name} added as a mod role.")
+
+@bot.command()
+async def removemodrole(ctx, role: discord.Role):
+    roles = mod_roles.get(ctx.guild.id, [])
+    if role.id not in roles:
+        return await ctx.send(f"ℹ️ {role.name} is not currently a mod role.")
+    roles.remove(role.id)
+    save_modroles()
+    await ctx.send(f"🗑️ {role.name} removed from mod roles.")
+
+@bot.command()
+async def viewmodlist(ctx):
+    roles = mod_roles.get(ctx.guild.id, [])
+    if not roles:
+        return await ctx.send("ℹ️ No mod roles set.")
+    names = [discord.utils.get(ctx.guild.roles, id=rid).name for rid in roles if discord.utils.get(ctx.guild.roles, id=rid)]
+    await ctx.send("🪪 Current mod roles: " + ", ".join(names))
 
 # === Safe rename queuing to prevent rate limits ===
+
 async def queue_rename(channel: discord.TextChannel, target_name: str):
     queue = rename_queues[channel.id]
     await queue.put(target_name)
-
     if channel.id not in rename_tasks:
         rename_tasks[channel.id] = asyncio.create_task(handle_rename_queue(channel))
 
 async def handle_rename_queue(channel: discord.TextChannel):
     queue = rename_queues[channel.id]
-
     while not queue.empty():
         try:
             target_name = await queue.get()
-            await asyncio.sleep(1.5)  # Let other renames settle
-
+            await asyncio.sleep(1.5)
             if channel.name != target_name:
                 await channel.edit(name=target_name)
                 print(f"✅ Renamed {channel.name} to {target_name}")
             else:
                 print(f"⏳ Skipping rename; already named {target_name}")
-
-            await asyncio.sleep(10)  # Respect rate limits
-
+            await asyncio.sleep(10)
         except discord.HTTPException as e:
             print(f"❌ Rename error (rate limit?): {e}")
-            await asyncio.sleep(30)  # Back off on error
+            await asyncio.sleep(30)
         except Exception as e:
             print(f"❌ Unexpected error in rename queue: {e}")
-
-    # Clean up task reference
     del rename_tasks[channel.id]
 
+# === Helper ===
+
+def extract_channel_id(raw):
+    match = re.search(r"<#?(\d{17,19})>|(\d{17,19})|channels/\d+/(\d{17,19})", raw)
+    return int(next(filter(None, match.groups()), None)) if match else None
+
 # === Launch bot ===
+
 keep_alive()
 print("🚀 Starting bot...")
 bot.run(os.environ["DISCORD_TOKEN"])
