@@ -11,6 +11,8 @@ import asyncio
 from collections import defaultdict
 import time
 
+rename_queues = defaultdict(asyncio.Queue)
+rename_tasks = {}
 cooldowns = defaultdict(lambda: 0)
 
 # === Flask keep_alive setup ===
@@ -138,8 +140,7 @@ async def enforce_name(channel, force=False):
         cooldowns[channel.id] = time.time()
 
         try:
-            await channel.edit(name=new_name)
-            last_names[channel.id] = new_name
+            await queue_rename(channel, new_name)
             print(f"✅ Renamed {channel.name} → {new_name}")
         except Exception as e:
             print(f"❌ Rename failed for {channel.name}: {e}")
@@ -257,7 +258,7 @@ async def rename(ctx, *args):
 
     try:
         old_name = channel.name
-        await channel.edit(name=new_name)
+        await queue_rename(channel, new_name)
         await ctx.send(f"✅ Renamed <#{channel.id}> from `{old_name}` to `{new_name}`.")
     except Exception as e:
         await ctx.send(f"❌ Rename failed: {e}")
@@ -353,6 +354,39 @@ async def setmodrole(ctx, role: discord.Role):
     mod_roles[ctx.guild.id] = role.id
     save_modroles()
     await ctx.send(f"🛡️ `{role.name}` set as mod role.")
+
+# === Safe rename queuing to prevent rate limits ===
+async def queue_rename(channel: discord.TextChannel, target_name: str):
+    queue = rename_queues[channel.id]
+    await queue.put(target_name)
+
+    if channel.id not in rename_tasks:
+        rename_tasks[channel.id] = asyncio.create_task(handle_rename_queue(channel))
+
+async def handle_rename_queue(channel: discord.TextChannel):
+    queue = rename_queues[channel.id]
+
+    while not queue.empty():
+        try:
+            target_name = await queue.get()
+            await asyncio.sleep(1.5)  # Let other renames settle
+
+            if channel.name != target_name:
+                await channel.edit(name=target_name)
+                print(f"✅ Renamed {channel.name} to {target_name}")
+            else:
+                print(f"⏳ Skipping rename; already named {target_name}")
+
+            await asyncio.sleep(10)  # Respect rate limits
+
+        except discord.HTTPException as e:
+            print(f"❌ Rename error (rate limit?): {e}")
+            await asyncio.sleep(30)  # Back off on error
+        except Exception as e:
+            print(f"❌ Unexpected error in rename queue: {e}")
+
+    # Clean up task reference
+    del rename_tasks[channel.id]
 
 # === Launch bot ===
 keep_alive()
